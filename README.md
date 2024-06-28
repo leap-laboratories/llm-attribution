@@ -2,13 +2,13 @@
 
 The LLM Attribution Library is designed to compute the contribution of each token in a prompt to the generated response of a language model.  
 
-It can be used with both local LLMs:  
+It can be used with OpenAI LLMs accessible through an API:  
+![API-accessible LLM Attribution Table](docs/assets/api-PIZZA.png)
 
-![Local LLM Attribution Table](docs/assets/local-llm-attribution.png)
+and local LLMs:
+![Local LLM Attribution Table](docs/assets/local-PIZZA.png)
 
-And OpenAI LLMs accessible through an API:  
-![API-accessible LLM Attribution Table](docs/assets/api-llm-attribution.png)
-
+And 
 ## Index  
 - [Quickstart](#quickstart)
 - [Requirements](#requirements)
@@ -18,7 +18,7 @@ And OpenAI LLMs accessible through an API:
 - [API Design](#api-design)
   - [BaseLLMAttributor](#basellmattributor)
   - [LocalLLMAttributor](#localllmattributor)
-  - [APILLMAttributor](#apillmattributor)
+  - [OpenAIAttributor](#OpenAIAttributor)
   - [PerturbationStrategy and AttributionStrategy](#perturbationstrategy-and-attributionstrategy)
   - [ExperimentLogger](#experimentlogger)
 - [Limitations](#limitations)
@@ -29,6 +29,34 @@ And OpenAI LLMs accessible through an API:
 - [Testing](#testing)
 
 ## Quickstart
+
+
+Attrubution via OpenAI's API:  
+
+# !!! This will use API credits !!!
+
+```python
+from attribution.api_attribution import OpenAIAttributor
+from attribution.experiment_logger import ExperimentLogger
+from attribution.token_perturbation import NthNearestPerturbationStrategy
+
+# set your "OPENAI_API_KEY" environment variable to your openai API key, or pass it here:
+attributor = OpenAIAttributor(openai_api_key=YOUR_OPENAI_API_KEY)
+logger = ExperimentLogger()
+
+input_text = "The clock shows 9:47 PM. How many minutes 'til 10?"
+attributor.compute_attributions(
+    input_text,
+    perturbation_strategy=NthNearestPerturbationStrategy(n=-1),
+    attribution_strategies=["cosine", "prob_diff"],
+    logger=logger,
+    perturb_word_wise=True,
+)
+
+logger.print_sentence_attribution()
+logger.print_attribution_matrix(exp_id=1)
+
+```
 
 Example of gradient-based attrubution using gemma-2b locally:
 
@@ -55,31 +83,7 @@ attributor.print_attributions(
 )
 ```
 
-Attrubution using GPT-3 via OpenAI's API:  
-
-```python
-from attribution.api_attribution import APILLMAttributor
-from attribution.experiment_logger import ExperimentLogger
-from attribution.token_perturbation import NthNearestPerturbationStrategy
-
-attributor = APILLMAttributor()
-logger = ExperimentLogger()
-
-input_text = "The clock shows 9:47 PM. How many minutes 'til 10?"
-attributor.compute_attributions(
-    input_text,
-    perturbation_strategy=NthNearestPerturbationStrategy(n=-1),
-    attribution_strategies=["cosine", "prob_diff", "token_displacement"],
-    logger=logger,
-    perturb_word_wise=True,
-)
-
-logger.print_sentence_attribution()
-logger.print_attribution_matrix(exp_id=1)
-
-```
-
-Usage examples can be found in the `examples/` folder a more in-depth case study in `research/gemma-2b-case-study.ipynb`.
+Usage examples can be found in the `examples/` folder. There's also a colab-hosted quickstart notebook [here](https://colab.research.google.com/drive/1yf6izSzZg2K88QyaJwAwkZPPyLP4pPa-?usp=sharing).
 
 ## Requirements
 
@@ -96,13 +100,13 @@ This project uses [ruff](https://github.com/astral-sh/ruff) for linting and form
 1. First, clone the repository:
 
 ```bash
-git clone git@github.com:leap-laboratories/llm-attribution.git
+git clone git@github.com:leap-laboratories/PIZZA.git
 ```
 
 2. Navigate into the cloned directory:
 
 ```bash
-cd llm-attribution
+cd PIZZA
 ```
 
 3. Create a virtual environment and activate it:
@@ -130,7 +134,6 @@ Now, you should be able to import and use the library in your Python scripts.
 uv pip compile requirements.in -o requirements.txt
 uv pip compile requirements-dev.in -o requirements-dev.txt
 ```
-
 
 ## API Design
 
@@ -183,9 +186,9 @@ A convenience method is provided to clean up memory used by Python and Torch. Th
 local_attributor.cleanup()
 ```
 
-### APILLMAttributor
+### OpenAIAttributor
 
-`APILLMAttributor` uses the OpenAI API to compute attributions. Given that gradients are not accessible, the attributor perturbs the input with a given `PerturbationStrategy` and measures the magnitude of change of the generated output with an `attribution_strategy`.
+`OpenAIAttributor` uses the OpenAI API to compute attributions. Given that gradients are not accessible, the attributor perturbs the input with a given `PerturbationStrategy` and measures the magnitude of change of the generated output with an `attribution_strategy`.
 
 The `compute_attributions` method:
 1. Sends a chat completion request to the OpenAI API.
@@ -194,23 +197,28 @@ The `compute_attributions` method:
 4. Logs attribution scores to an `ExperimentLogger` if passed.
 
 ```python
-class APILLMAttributor(BaseLLMAttributor):
+class OpenAIAttributor(BaseLLMAttributor):
     def __init__(
         self,
-        model: Optional[PreTrainedModel] = None,
+        openai_api_key: Optional[str] = None,
+        openai_model: Optional[str] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
         token_embeddings: Optional[np.ndarray] = None,
     ):
-        ...
-    def compute_attributions(self, input_text: str, **kwargs):
-        ...
+        openai_api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
+        self.openai_client = openai.OpenAI(api_key=openai_api_key)
+        self.openai_model = openai_model or "gpt-3.5-turbo"
+
+        self.tokenizer = tokenizer or GPT2Tokenizer.from_pretrained("gpt2")
+        self.token_embeddings = token_embeddings or GPT2LMHeadModel.from_pretrained("gpt2").transformer.wte.weight.detach().numpy()
+
 ```
 
 ### PerturbationStrategy and AttributionStrategy
 
 `PerturbationStrategy` is an abstract base class that defines the interface for all perturbation strategies. It declares the `get_replacement_token` method, which must be implemented by any concrete perturbation strategy class. This method takes a token id and returns a replacement token id.
 
-The `attribution_strategy` parameter is a string that specifies the method to use for computing attributions. The available strategies are "cosine", "prob_diff", and "token_displacement".
+The `attribution_strategy` parameter is a string that specifies the method to use for computing attributions. The available strategies are "cosine" and "prob_diff".
 
 - **Cosine Similarity Attribution**: Measures the cosine similarity between the embeddings of the original and perturbed outputs. The embeddings are obtained from a pre-trained model (e.g. GPT2). The cosine similarity is calculated for each pair of tokens in the same position on the original and perturbed outputs. For example, it compares the token in position 0 in the original response to the token in position 0 in the perturbed response. Additionally, the cosine similarity of the entire sentence embeddings is computed. The difference in sentence similarity and token similarities are returned.
 
@@ -242,7 +250,7 @@ This format is common across HuggingFace models.
 
 ## GPU Acceleration
 
-To run the attribution process on a device of your choice, pass the device identifier into the `Attributor` class constructor:
+To run the attribution process on a device of your choice (for local attribution), pass the device identifier into the `Attributor` class constructor:
 
 ```python
 attributor = Attributor(
@@ -282,4 +290,4 @@ python -m pytest tests/integration
 ```
 
 ## Research 
-Some preliminary exploration and research into using attribution and quantitatively measuring attribution success can be found in the research folder of this repository. We'd be excited to see expansion of this small library, including both algorithmic improvements, further attribution and perturbation methods, and more rigorous and exhaustive experimentation. We welcome pull requests and issues from external collaborators.
+Some preliminary exploration and research into using attribution and quantitatively measuring attribution success can be found in the examples folder of this repository. We'd be excited to see expansion of this small library, including both algorithmic improvements, further attribution and perturbation methods, and more rigorous and exhaustive experimentation. We welcome pull requests and issues from external collaborators.
